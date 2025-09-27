@@ -17,3 +17,16 @@ build-backend = "poetry.core.masonry.api"
 
 [tool.poetry.scripts]
 project = "labyrinth_game.main:main"
+
+[tool.ruff]
+line-length = 88
+target-version = "py311"
+exclude = ["venv", ".venv", "dist", "__pycache__"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+ignore = []
+[dependency-groups]
+dev = [
+    "ruff (>=0.13.2,<0.14.0)"
+]
