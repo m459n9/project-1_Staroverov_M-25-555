@@ -1,7 +1,67 @@
+import math
+
 from labyrinth_game.constants import ROOMS
 
 
+def pseudo_random(seed: int, modulo: int) -> int:
+    """Возвращает детерминированное псевдослучайное целое в диапазоне [0, modulo)."""
+    if modulo <= 0:
+        return 0
+    x = math.sin(seed * 12.9898) * 43758.5453
+    frac = x - math.floor(x)
+    return int(frac * modulo)
+
+
+def trigger_trap(game_state: dict) -> None:
+    """Срабатывает ловушка: теряем предмет из инвентаря или получаем урон/поражение."""
+    print("Ловушка активирована! Пол стал дрожать...")
+
+    inv = game_state.get("player_inventory", [])
+    seed = game_state.get("steps_taken", 0)
+
+    if inv:
+        idx = pseudo_random(seed, len(inv))
+        lost = inv.pop(idx)
+        print(f"Вы потеряли предмет: {lost}")
+        return
+
+    roll = pseudo_random(seed, 10)
+    if roll < 3:
+        print("Вы получили урон и потеряли сознание. Поражение.")
+        game_state["game_over"] = True
+    else:
+        print("Вы едва уцелели и продолжаете путь.")
+
+
+def random_event(game_state: dict) -> None:
+    """С небольшой вероятностью запускает одно из случайных событий при перемещении."""
+    seed = game_state.get("steps_taken", 0)
+    room_key = game_state.get("current_room", "entrance")
+    room = ROOMS.get(room_key, {})
+
+    # редкость события: ~1 из 10
+    if pseudo_random(seed, 10) != 0:
+        return
+
+    choice = pseudo_random(seed + 1, 3)
+
+    if choice == 0:
+        print("На полу блеснула монетка.")
+        room.setdefault("items", []).append("coin")
+    elif choice == 1:
+        print("Вы слышите шорох где-то рядом...")
+        if "sword" in game_state.get("player_inventory", []):
+            print("Вы выставляете меч — существо отступает.")
+    else:
+        if room_key == "trap_room" and "torch" not in game_state.get(
+            "player_inventory", []
+        ):
+            print("Опасно! В темноте может быть ловушка.")
+            trigger_trap(game_state)
+
+
 def get_input(prompt: str = "> ") -> str:
+    """Запрашивает ввод. Ctrl+C/Ctrl+D — выход (возвращает 'quit')."""
     try:
         return input(prompt)
     except (KeyboardInterrupt, EOFError):
@@ -10,6 +70,7 @@ def get_input(prompt: str = "> ") -> str:
 
 
 def describe_current_room(game_state: dict) -> None:
+    """Печатает заголовок, описание, предметы, выходы и пометку о загадке."""
     room_key = game_state["current_room"]
     room = ROOMS[room_key]
 
@@ -28,20 +89,15 @@ def describe_current_room(game_state: dict) -> None:
         print("Кажется, здесь есть загадка (используйте команду solve).")
 
 
-def show_help() -> None:
+def show_help(commands: dict) -> None:
+    """Выводит список доступных команд с краткими описаниями."""
     print("\nДоступные команды:")
-    print("  go <direction>  - перейти (north/south/east/west/up/down)")
-    print("  look            - осмотреть текущую комнату")
-    print("  take <item>     - поднять предмет")
-    print("  use <item>      - использовать предмет из инвентаря")
-    print("  inventory       - показать инвентарь")
-    print("  solve           - решить загадку в комнате")
-    print("  quit            - выйти из игры")
-    print("  help            - показать это сообщение")
+    for cmd, desc in commands.items():
+        print(f"  {cmd:<16} - {desc}")
 
 
 def solve_puzzle(game_state: dict) -> None:
-    """Задать вопрос, принять ответ, проверить и выдать награду при успехе."""
+    """Показывает загадку, проверяет ответ (с альтернативами), выдаёт награду."""
     room_key = game_state["current_room"]
     room = ROOMS[room_key]
     puzzle = room.get("puzzle")
@@ -52,32 +108,41 @@ def solve_puzzle(game_state: dict) -> None:
 
     question, correct_answer = puzzle
     print("Загадка:", question)
-    user_answer = get_input("Ваш ответ: ")
+    user_answer = get_input("Ваш ответ: ").strip().lower()
 
-    if str(user_answer).strip().lower() == str(correct_answer).strip().lower():
+    alt_map = {
+        "10": {"10", "десять"},
+        "6": {"6", "шесть"},
+        "дождь": {"дождь", "дожди"},
+        "париж": {"париж"},
+        "урок": {"урок"},
+        "равны": {"равны", "одинаковы"},
+    }
+
+    correct_key = str(correct_answer).strip().lower()
+    valid_answers = alt_map.get(correct_key, {correct_key})
+
+    if user_answer in valid_answers:
         print("Верно! Загадка решена.")
         room["puzzle"] = None
 
         reward_by_room = {
-            # пример награды за библиотеку
-            "library": "treasure key",
+            "hall": "treasure key",
+            "library": "rusty key",
         }
         reward = reward_by_room.get(room_key)
         if reward and reward not in game_state["player_inventory"]:
             game_state["player_inventory"].append(reward)
             print(f"Вы получили награду: {reward}")
-        else:
-            if reward is None:
-                print("Вы чувствуете, как что-то изменилось в лабиринте...")
     else:
         print("Неверно. Попробуйте снова.")
+        if room_key == "trap_room":
+            print("Кажется, сработала ловушка за неверный ответ!")
+            trigger_trap(game_state)
 
 
 def attempt_open_treasure(game_state: dict) -> None:
-    """
-    Открыть 'treasure chest' ключом или кодом.
-    Если сундук в инвентаре — вернуть его в комнату и продолжить.
-    """
+    """Открывает сундук ключом или кодом. Успех — победа в игре."""
     room_key = game_state["current_room"]
     room = ROOMS[room_key]
     items = room.get("items", [])
@@ -97,7 +162,7 @@ def attempt_open_treasure(game_state: dict) -> None:
         return
 
     has_key = any(
-        k in inv for k in ("treasure key", "treasure_key", "rusty key", "rusty_key")
+        k in inv for k in ("treasure key", "rusty key")
     )
 
     if has_key:
